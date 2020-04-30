@@ -351,3 +351,375 @@ And in Program:
             }
 ```
 
+# Generics & Specification Pattern
+We could have a single repository that can be used with a lot of entities.
+It can have a bad reputation becuase different entities will have different patterns, but the way to get aroudn this is to use the "Specification" pattern.
+
+Generics
+* Been around since 2002 (C# 2.0)
+* Help avoid duplicate code
+* Give us type safety, most of the time we use them rather than creating them
+
+Creating a generic repo example:
+T has to be a class of BaseEntity or derive from BaseEntity
+where can be a class, method
+```C#
+public interface IGenericRepository<T> where T: BaseEntity
+{
+  Task<T> GetByIdAsync(int id);
+  Task<IReadOnlyList<T>> ListAllAsync();
+  ...
+}
+```
+
+## Creating a generic Repo
+We cannot use include in generic repos or return different types like pagination right now. 
+We can use Set<T> to get the entity set.
+
+```C#
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace Infrastructure.Data
+{
+  public class GenericRepository<T> : IGenericRepository<T> where T : BaseEntity
+  {
+    private readonly StoreContext _context;
+    public GenericRepository(StoreContext context)
+    {
+      _context = context;
+    }
+
+    public async Task<T> GetByIdAsync(int id)
+    {
+      return await _context.Set<T>().FindAsync(id);
+    }
+
+    public async Task<IReadOnlyList<T>> ListAllAsync()
+    {
+      return await _context.Set<T>().ToListAsync();
+    }
+  }
+}
+```
+
+## Specification Pattern
+This strategy will help us deal with some of the downfalls of using a generic repository
+
+* Describes the query in an object (Instead of passing in an expression)
+* Returns an IQueryable<T>
+* Generic List method takes specification as paramter instead of expression
+* Specification can have a meaningful name
+* * ProductsWithTypesAndBrandsSpecification
+
+The cde looks like this:
+
+Specification (all products with name red in name returns an IQueryable)
+Then we pass that to the generic repo ListAsync(specification)
+
+## Setting up Specification Pattern
+
+```C#
+using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+
+namespace Core.Specifications
+{
+  public interface ISpecification<T>
+  {
+    Expression<Func<T, bool>> Criteria { get; }
+    List<Expression<Func<T, object>>> Includes { get; }
+  }
+}
+```
+
+Base specification Class
+```C#
+using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+
+namespace Core.Specifications
+{
+  public class BaseSpecification<T> : ISpecification<T>
+  {
+    public BaseSpecification(Expression<Func<T, bool>> criteria)
+    {
+      Criteria = criteria;
+    }
+
+    public Expression<Func<T, bool>> Criteria { get; }
+
+    // The list of includes will be a list of expressions that take a type and object.
+    public List<Expression<Func<T, object>>> Includes { get;} = new List<Expression<Func<T, object>>>();
+
+    // This method will be used to add ot the list of includes.
+    protected void AddInclude(Expression<Func<T, object>> includeExpression)
+    {
+        Includes.Add(includeExpression);
+    }
+  }
+}
+```
+
+## Creating a Specification Evaluator
+This will take in a specification object (List of inclues and the criteria), eveluate them and generate the IQueryable.
+
+Evaluator will be part of the infrastructure project.
+```C#
+using System.Linq;
+using Core.Entities;
+using Core.Specifications;
+using Microsoft.EntityFrameworkCore;
+
+namespace Infrastructure.Data
+{
+    public class SpecificationEvaluator<TEntity> where TEntity : BaseEntity
+    {
+        public static IQueryable<TEntity> GetQuery(IQueryable<TEntity> inputQuery, ISpecification<TEntity> spec)
+        {
+            var query = inputQuery;
+
+            // If we have a criteria in the specification then add it to the query.
+            if (spec.Criteria != null)
+            {
+                query = query.Where(spec.Criteria);
+            }
+
+            // Go over all the includes, aggregate them into include expressions.
+            query = spec.Includes.Aggregate(query, (current, include) => current.Include(include));
+
+            return query;
+        }
+    }
+}
+```
+
+## Adding Repository Methods for Specification Queries
+We create a method to Apply Specification which just calls the Evaluator using the curernt entity and passes in the specification.
+
+THen the new methods will simply apply specification first then run firstOrDefaultAsync or toListAsync().
+
+```C#
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+using Core.Specifications;
+using Microsoft.EntityFrameworkCore;
+
+namespace Infrastructure.Data
+{
+  public class GenericRepository<T> : IGenericRepository<T> where T : BaseEntity
+  {
+    private readonly StoreContext _context;
+    public GenericRepository(StoreContext context)
+    {
+      _context = context;
+    }
+
+    public async Task<T> GetByIdAsync(int id)
+    {
+      return await _context.Set<T>().FindAsync(id);
+    }
+
+    public async Task<IReadOnlyList<T>> ListAllAsync()
+    {
+      return await _context.Set<T>().ToListAsync();
+    }
+
+    public async Task<T> GetEntityWithSpec(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).FirstOrDefaultAsync();
+    }
+
+    public async Task<IReadOnlyList<T>> ListAsync(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).ToListAsync();
+    }
+
+    private IQueryable<T> ApplySpecification(ISpecification<T> spec)
+    {
+      return SpecificationEvaluator<T>.GetQuery(_context.Set<T>().AsQueryable(), spec);
+    }
+  }
+}
+```
+
+## Creating a Specification to include items
+We cretae two constructores one for all items and one for a specific item.
+
+```C#
+using System;
+using System.Linq.Expressions;
+using Core.Entities;
+
+namespace Core.Specifications
+{
+  public class ProductsWithTypesAndBrandsSpecification : BaseSpecification<Product>
+  {
+    public ProductsWithTypesAndBrandsSpecification()
+    {
+      AddInclude(p => p.ProductType);
+      AddInclude(p => p.ProductBrand);
+    }
+
+    public ProductsWithTypesAndBrandsSpecification(int id) : base(x => x.Id == id)
+    {
+      AddInclude(p => p.ProductType);
+      AddInclude(p => p.ProductBrand);
+    }
+  }
+}
+```
+
+## Making use of the Specifications in Controllers
+```C#
+    [HttpGet("{id}")]
+    public async Task<ActionResult<Product>> GetProduct(int id)
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification(id);
+
+      return await _productRepo.GetEntityWithSpec(spec);
+    }
+```
+
+# Shaping Data
+We'll use Dto's to return object that will be sent back.
+Dto's will be held in API.
+
+## Creating Dto and using it in controller
+```C#
+namespace API.Dtos
+{
+    public class ProductToReturnDto
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+        public string Description { get; set; }
+        public decimal Price { get; set; }
+        public string PictureUrl { get; set; }
+        public string ProductType { get; set; }
+        public string ProductBrand { get; set; }
+    }
+}
+```
+
+```C#
+    [HttpGet("{id}")]
+    public async Task<ActionResult<ProductToReturnDto>> GetProduct(int id)
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification(id);
+
+      var product = await _productRepo.GetEntityWithSpec(spec);
+
+      return new ProductToReturnDto{
+        Id = product.Id,
+        Name = product.Name,
+        Description = product.Description,
+        Price = product.Price,
+        PictureUrl = product.PictureUrl,
+        ProductBrand = product.ProductBrand.Name,
+        ProductType = product.ProductType.Name
+      };
+    }
+```
+
+And Mapping a List
+```C#
+
+    [HttpGet]
+    public async Task<ActionResult<List<ProductToReturnDto>>> GetProducts()
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification();
+
+      var products = await _productRepo.ListAsync(spec);
+
+      return products.Select(product => new ProductToReturnDto
+      {
+        Id = product.Id,
+        Name = product.Name,
+        Description = product.Description,
+        Price = product.Price,
+        PictureUrl = product.PictureUrl,
+        ProductBrand = product.ProductBrand.Name,
+        ProductType = product.ProductType.Name
+      }).ToList();
+    }
+```
+
+## Using AutoMapper to take care of mapping.
+Install in API project
+    <PackageReference Include="AutoMapper.Extensions.Microsoft.DependencyInjection" Version="7.0.0"/>
+
+### Create a Profile
+```C#
+using API.Dtos;
+using AutoMapper;
+using Core.Entities;
+
+namespace API.Helpers
+{
+  public class MappingProfiles : Profile
+  {
+    public MappingProfiles()
+    {
+        CreateMap<Product, ProductToReturnDto>()
+            .ForMember(d => d.ProductBrand, o => o.MapFrom(s => s.ProductBrand.Name))
+            .ForMember(d => d.ProductType, o => o.MapFrom(s => s.ProductType.Name))
+            .ForMember(d => d.PictureUrl, o => o.MapFrom<ProductUrlResolver>());
+    }
+  }
+}
+```
+### Add it to Startup Class
+```C#
+services.AddAutoMapper(typeof(MappingProfiles));
+```
+
+### Creating a custom Resolver
+We can inject services in the resolver constructor.
+```C#
+using API.Dtos;
+using AutoMapper;
+using Core.Entities;
+using Microsoft.Extensions.Configuration;
+
+namespace API.Helpers
+{
+  public class ProductUrlResolver : IValueResolver<Product, ProductToReturnDto, string>
+  {
+    private readonly IConfiguration _config;
+    public ProductUrlResolver(IConfiguration config)
+    {
+      _config = config;
+    }
+
+    public string Resolve(Product source, ProductToReturnDto destination, string destMember, ResolutionContext context)
+    {
+        if (!string.IsNullOrEmpty(source.PictureUrl))
+        {
+            return _config["ApiUrl"] + source.PictureUrl;
+        }
+
+        return null;
+    }
+  }
+}
+```
+
+# Serving Static Content From API
+Any content inside wwwroot, will be looked in and served automatically.
+
+Has to go after UseRouting();
+If routes is not found then it will look in wwwroot.
+```C#
+      app.UseRouting();
+      
+      app.UseStaticFiles();
+```
