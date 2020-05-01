@@ -1477,3 +1477,73 @@ app.UseCors("CorsPolicy");
 
 
 
+# Setting Up Angular in the project
+
+## Client
+`ng new client`
+Add Routing
+SCSS for styles
+
+## Setting UP Angular for HTTPS
+We want to server Angular over HTTPS during development
+CreditCard details cannot be put over http, browsers will give warning.
+
+Easier to use HTTPS from the get-go
+
+We'll need to get self signed certificates.
+We can generate one with openSSL or some other tool.
+
+Copy the crt and .key file into a new ssl folder created in the client.
+
+Now add the certificate to the certificate store:
+```
+Windows 10
+
+	1. Double click on the certificate (server.crt)
+	2. Click on the button “Install Certificate …”
+	3. Select whether you want to store it on user level or on machine level
+	4. Click “Next”
+	5. Select “Place all certificates in the following store”
+	6. Click “Browse”
+	7. Select “Trusted Root Certification Authorities”
+	8. Click “Ok”
+	9. Click “Next”
+	10. Click “Finish”
+
+If you get a prompt, click “Yes”
+```
+
+### Tell Angular to serve certificates:
+angular.json in the serve section:
+```json
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "options": {
+            "browserTarget": "client:build",
+            "sslKey": "ssl/server.key",
+            "sslCert": "ssl/server.crt",
+            "ssl": true
+          },
+```
+
+## Adding Bootstrap to angular
+the package to use for bootstrap is ngx-bootstap
+`npm install ngx-bootstrap` or `ng add ngx-bootstrap`
+
+ng add ngx-bootstrap will automatically do the following:
+Add bootstrap angular.json styles
+```json
+          "styles": [
+              "./node_modules/bootstrap/dist/css/bootstrap.min.css",
+              "./node_modules/ngx-bootstrap/datepicker/bs-datepicker.css",
+              "src/styles.scss"
+            ],
+```
+Add BrowserAnimations to module
+
+
+## Adding FontAwesome
+`npm install font-awesome`
+Stylesheet needs to be added manually.
+
+
