@@ -1546,4 +1546,10 @@ Add BrowserAnimations to module
 `npm install font-awesome`
 Stylesheet needs to be added manually.
 
+# Good Angular VS Code Extensions
+Angular Language Service
+Prettier
+BracketPairColorizer
+TSLint
+
 
