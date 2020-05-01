@@ -1132,3 +1132,348 @@ namespace API.Controllers
     }
 }
 ```
+
+# Paging, Filtering, Sorting, and Searching
+Goal: 
+To be able to implement sorting, searching and pagination functionality in a list using the Specification pattern.
+
+## Defferred Execution
+* Query commands are stored in a variable
+* Execution of the query is deferred
+* IQuerable<T> creates an exression tree
+* Execusion:
+ToList()
+ToArray()
+ToDictionary()
+Count() or other Singleton queries.
+
+## Adding a sorting specification class
+
+Add new properties to the ISpecification
+```C#
+    Expression<Func<T, object>> OrderBy {get; }
+    Expression<Func<T, object>> OrderByDescending {get; }
+```
+
+And Base Specification
+```C#
+    public Expression<Func<T, object>> OrderBy {get; private set;}
+    public Expression<Func<T, object>> OrderByDescending {get; private set;}
+
+    // New methods
+    protected void AddOrderBy(Expression<Func<T, object>> orderByExpression)
+    {
+      OrderBy = orderByExpression;
+    }
+    protected void AddOrderByDescending(Expression<Func<T, object>> orderByDescExpression)
+    {
+      OrderByDescending = orderByDescExpression;
+    }
+```
+
+No we need to update the SpecificationEvaluator, if it sees an order by it has to add that on:
+```C#
+  if (spec.OrderBy != null)
+  {
+      query = query.OrderBy(spec.OrderBy); // p => p.ProductTypeId == id
+  }
+              // If we have an OrderBy then add it on to the query
+  if (spec.OrderByDescending != null)
+  {
+      query = query.OrderByDescending(spec.OrderByDescending); // p => p.ProductTypeId == id
+  }
+```
+
+Finally we can update the ProductsWithTypesAndBrandsSpecification:
+Here we'll check which order by to use, if they add a priceDesc or priceAsc, we'll order by Name by default.
+```C#
+    public ProductsWithTypesAndBrandsSpecification(string sort)
+    {
+      AddInclude(p => p.ProductType);
+      AddInclude(p => p.ProductBrand);
+      // Order by Name by default
+      AddOrderBy(x => x.Name);
+
+      if (!string.IsNullOrEmpty(sort))
+      {
+        switch (sort)
+        {
+          case "priceAsc":
+            AddOrderBy(p => p.Price);
+            break;
+          case "priceDesc":
+            AddOrderByDescending(p => p.Price);
+            break;
+          default:
+            AddOrderBy(p => p.Name);
+            break;
+        }
+      }
+    }
+```
+
+## Adding Filtering functionality
+We want to filter by the product Type and the product Brand. We already have a Criteria in our specification. We can use that.
+
+In the controller we can pass a brandId and a TypeId
+```C#
+ public async Task<ActionResult<IReadOnlyList<ProductToReturnDto>>> GetProducts(string sort, int? brandId, int? typeId)
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification(sort, brandId, typeId);
+```
+
+Now we need to make use of it in our ProductsWithTypesAndBrandsSpecification
+```C#
+namespace Core.Specifications
+{
+  public class ProductsWithTypesAndBrandsSpecification : BaseSpecification<Product>
+  {
+    // Call into Base,base has a contstructor that takes criteria. We can use that constructor.
+    // HEre we'll use a lambda expression but use || and && to build up the expression dependin on if a brandId and typeID is present.
+    public ProductsWithTypesAndBrandsSpecification(string sort, int? brandId, int? typeId) :
+    base(x => (!brandId.HasValue || x.ProductBrandId == brandId) && (!typeId.HasValue || x.ProductTypeId == typeId))
+```
+
+## Pagination
+* Done for performance, you don't have to return all items at once.
+* Parameters pass by query sting:
+`/api/products?pageNumber=2&pageSize=5`
+* Page size should be limited
+* * We'll set our to 50 max
+* Alway page results even if users don't send 
+
+ISpecification
+We'll need new propeties for Pagination
+
+```C#
+    int Take { get; }
+    int Skip { get; }
+    bool isPagingEnabled { get; }
+```
+
+Implementation in BaseSpecification.
+Create the properties:
+```C#
+    public int Take {get; private set;}
+    public int Skip {get; private set;}
+    public bool isPagingEnabled {get; private set;}
+```
+
+We'll again create methods to add these properties:
+```C#
+    protected void ApplyPaging(int skip, int take)
+    {
+      Skip = skip;
+      Take = take;
+      isPagingEnabled = true;
+    }
+```
+
+Now in the evaluator we have to evalue the spec:
+Order matters here, we wantto page after filtering and ordering
+```C#
+  if (spec.isPagingEnabled)
+  {
+      query = query.Skip(spec.Skip).Take(spec.Take).;
+  }
+```
+
+### Paging In Controller
+Create new Class to Store Parameters
+the controller is taking too many parameters, we can create a class to take care of that
+
+```C#
+namespace Core.Specifications
+{
+    public class ProductSpecParams
+    {
+        private const int MaxPageSize = 50;
+        public int PageIndex {get; set;} = 1;
+        private int _pageSize = 6;
+        public int PageSize 
+        {
+            get  => _pageSize;
+            // Only allow a maximum of MaxPageSize when setting this.
+            set => _pageSize = (value > MaxPageSize) ? MaxPageSize : value;
+        }
+        public int? BrandId { get; set; }
+        public int? TypeId { get; set; }
+        public string sort { get; set; }
+    }
+}
+```
+
+Now in the controller:
+We have to tell it the object will come from query otherwise it will look at the Body by default and throw an error.
+```C#
+    public async Task<ActionResult<IReadOnlyList<ProductToReturnDto>>> GetProducts([FromQuery]ProductSpecParams productSpecParams)
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification(productSpecParams);
+
+      var products = await _productRepo.ListAsync(spec);
+
+      return Ok(_mapper.Map<IReadOnlyList<ProductToReturnDto>>(products));
+```
+
+In the Specification we have to use our ApplyPaging method and fix all the variables now that we are passing the productSpecParam instead of direct values. 
+```C# Specification
+    public ProductsWithTypesAndBrandsSpecification(ProductSpecParams productSpecParams) :
+    base(x => (!productSpecParams.BrandId.HasValue || x.ProductBrandId == productSpecParams.BrandId) 
+      && (!productSpecParams.TypeId.HasValue || x.ProductTypeId == productSpecParams.TypeId))
+    {
+      AddInclude(p => p.ProductType);
+      AddInclude(p => p.ProductBrand);
+      // Order by Name by default
+      AddOrderBy(x => x.Name);
+      // Apply paging, skip has to be the pagesize * the pageindex -1. The minus 1 is if we are on page 1 we dont' want to skip any.
+      ApplyPaging(productSpecParams.PageSize * (productSpecParams.PageIndex - 1), productSpecParams.PageSize);
+
+      if (!string.IsNullOrEmpty(productSpecParams.Sort))
+      {
+        switch (productSpecParams.Sort)
+```
+
+### Returning Pagination Infromation For Client
+We can wrap the response in a pagination class that makes the info available for the client.
+
+```C#
+using System.Collections.Generic;
+
+namespace API.Helpers
+{
+    public class Pagination<T> where T : class
+    {
+        public int PageIndex { get; set; }
+        public int PageSize { get; set; }
+        public int Count { get; set; }
+        public IReadOnlyList<T> Data { get; set; }
+    }
+}
+```
+We'll need a specification class just to apply filters and return a Count of total items
+This specification will be very similar to the other one, excpetion it will not have the other criteria such as adding includes ordering and filtering.
+For this one we just want to get all the items for the criteria specified.
+```C#
+using Core.Entities;
+
+namespace Core.Specifications
+{
+  public class ProductsWithFiltersForCountSpecification : BaseSpecification<Product>
+  {
+    public ProductsWithFiltersForCountSpecification(ProductSpecParams productSpecParams)
+    : base(x => (!productSpecParams.BrandId.HasValue || x.ProductBrandId == productSpecParams.BrandId) 
+      && (!productSpecParams.TypeId.HasValue || x.ProductTypeId == productSpecParams.TypeId))
+    {
+        
+    }
+  }
+}
+```
+
+We also have to add a new method to out Generic repository to return a Count:
+```C# InterfaceGernericRepository
+        Task<int> CountAsync(ISpecification<T> spec);
+```
+It will simply apply the specification and return a count
+```C#
+    public async Task<int> CountAsync(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).CountAsync();
+    }
+```
+Now in the controller
+In the controller we can get a count first,then get the items
+Instead of return just the item we'll now wrap it in our Pagination class.
+We'll return the count, the pageindex, pageSize and the data.
+```C#
+    [HttpGet]
+    public async Task<ActionResult<Pagination<ProductToReturnDto>>> GetProducts([FromQuery]ProductSpecParams productSpecParams)
+    {
+      var spec = new ProductsWithTypesAndBrandsSpecification(productSpecParams);
+
+      var countSpec = new ProductsWithFiltersForCountSpecification(productSpecParams);
+
+      var totalItems = await _productRepo.CountAsync(countSpec);
+
+      var products = await _productRepo.ListAsync(spec);
+      
+      var data = _mapper.Map<IReadOnlyList<ProductToReturnDto>>(products);
+
+      return new Pagination<ProductToReturnDto>(productSpecParams.PageIndex, productSpecParams.PageSize, totalItems, data);
+    }
+```
+
+## Adding search functionality
+Search functinality will be just another criteria to evaluate
+
+Add a new property to the Params
+productSpecParams
+```C#
+private string _search;
+
+public string Search { 
+    get => _search;
+    // make sure search term is always lower case.
+    set => _search = value.ToLower();
+  }
+```
+Add it to the filter in the SPecificaiton
+```C#
+      (string.IsNullOrEmpty(productSpecParams.Search) || x.Name.ToLower().Contains(productSpecParams.Search))
+      && (!productSpecParams.BrandId.HasValue || x.ProductBrandId == productSpecParams.BrandId) 
+      && (!productSpecParams.TypeId.HasValue || x.ProductTypeId == productSpecParams.TypeId))
+```
+
+IN this case the && will run each statemment either way. If the paramater is empty it will be true and it will move on to the next one.
+If it's not empty then the first condion will be false and it will move on to the next one and return that which will return true.
+
+
+## SQLite Conversion problem
+This is just for SQLite becuase it doesn't support ordering on decimal.
+
+In StoreContext onModelCreating
+```C#
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+      base.OnModelCreating(modelBuilder);
+      modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+      // This si for SQLite only, it doesn't support decimal, they will be converted to doubles and return doubles instead of decimal.
+      if (Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+      {
+        // Loop over all entities
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+          // get all properties of the entity that have a decimal propety type
+          var properties = entityType.ClrType.GetProperties().Where(p => p.PropertyType == typeof(decimal));
+
+          // Loop over the propeties that have decimals
+          // For each one set the conversion to double.
+          foreach (var property in properties)
+          {
+            modelBuilder.Entity(entityType.Name).Property(property.Name).HasConversion<double>();
+          }
+        }
+      }
+    }
+```
+
+# Adding Cors
+In Startup Class
+```C#
+      services.AddCors(opt => 
+      {
+        opt.AddPolicy("CorsPolicy", policy => 
+        {
+          policy.AllowAnyHeader().AllowAnyMethod().WithOrigins("https://localhost:4200");
+        });
+      });
+```
+
+In middleware before Authoriztion()
+```C#
+app.UseCors("CorsPolicy");
+```
+
+
+
