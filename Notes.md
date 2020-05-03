@@ -1553,3 +1553,21 @@ BracketPairColorizer
 TSLint
 
 
+# Angular File and Folder Structure StyleGuide
+App Module 
+
+And:
+
+Core Module = Has singletons, things that should only be used once. Should only be imported once in AppModule and never again.
+The reason behind this is that we want everything that’s inside the core module to be a Singleton !!! And this is very important if you need your components/services to have only one instance. Some usage examples are the profile service or the header or footer components.
+
+
+Shared Module = Imported in every feature module, has things that are shared between them. 
+It’s recommended to avoid having services in the SharedModule because you will end up with a lot of instances of that service.
+The SharedModule is the perfect place for importing and exporting back your UI Modules or components that are used a lot in your application. 
+
+
+Feature Modules = Every feature of the application will have its own module and routing.
+* Every feature module should have a root compoonent that is also named the same.
+
+Common module gives us ngFOr etc...
