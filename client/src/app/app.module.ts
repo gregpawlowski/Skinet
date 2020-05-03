@@ -7,7 +7,6 @@ import { HttpClientModule } from '@angular/common/http';
 
 import { CoreModule } from './core/core.module';
 import { AppComponent } from './app.component';
-import { ShopModule } from './shop/shop.module';
 @NgModule({
   declarations: [
     AppComponent,
@@ -17,8 +16,7 @@ import { ShopModule } from './shop/shop.module';
     AppRoutingModule,
     BrowserAnimationsModule,
     HttpClientModule,
-    CoreModule,
-    ShopModule
+    CoreModule
   ],
   providers: [],
   bootstrap: [AppComponent]
