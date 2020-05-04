@@ -1571,3 +1571,7 @@ Feature Modules = Every feature of the application will have its own module and 
 * Every feature module should have a root compoonent that is also named the same.
 
 Common module gives us ngFOr etc...
+
+# Angular: Creating an Error Component
+
+Redirect users for 500 and 404 Errors
