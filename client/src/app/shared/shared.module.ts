@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 
 // Bootstrap Modules
 import { PaginationModule } from 'ngx-bootstrap/pagination';
+import { CarouselModule } from 'ngx-bootstrap/carousel';
+
 import { PagingHeaderComponent } from './components/paging-header/paging-header.component';
 import { PagerComponent } from './components/pager/pager.component';
 
@@ -10,10 +12,12 @@ import { PagerComponent } from './components/pager/pager.component';
   declarations: [PagingHeaderComponent, PagerComponent],
   imports: [
     CommonModule,
-    PaginationModule.forRoot()
+    PaginationModule.forRoot(),
+    CarouselModule.forRoot()
   ],
   exports: [
     PaginationModule,
+    CarouselModule,
     PagingHeaderComponent,
     PagerComponent
   ]

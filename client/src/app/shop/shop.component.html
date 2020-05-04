@@ -1,20 +1,22 @@
-<div class="container">
+<div class="container mt-3">
   <div class="row">
 
     <section class="col-3">
-      <h5 class="text-warning ml-3">Sort</h5>
-      <select class="custom-select mb-3" (change)="onSortSelected($event.target.value)">
-        <option [value]="sort.value" *ngFor="let sort of sortOptions">{{sort.name}}</option>
-      </select>
-
-      <h5 class="text-warning ml-3">Brands</h5>
-      <ul class="list-group my-3">
-        <li class="list-group-item" [ngClass]="{active: shopParams.brandId === brand.id}" *ngFor="let brand of brands" (click)="onBrandSelected(brand.id)">{{brand.name}}</li>
-      </ul>
-      <h5 class="text-warning ml-3">Types</h5>
-      <ul class="list-group my-3">
-        <li class="list-group-item" [ngClass]="{active: shopParams.typeId === type.id}" *ngFor="let type of types" (click)="onTypeSelected(type.id)">{{type.name}}</li>
-      </ul>
+      <ng-container *ngIf="types && brands">
+        <h5 class="text-warning ml-3 mt-4 mb-4">Sort</h5>
+        <select class="custom-select mb-4" (change)="onSortSelected($event.target.value)">
+          <option [value]="sort.value" *ngFor="let sort of sortOptions">{{sort.name}}</option>
+        </select>
+        
+        <h5 class="text-warning ml-3">Brands</h5>
+        <ul class="list-group my-3">
+          <li class="list-group-item" [ngClass]="{active: shopParams.brandId === brand.id}" *ngFor="let brand of brands" (click)="onBrandSelected(brand.id)">{{brand.name}}</li>
+        </ul>
+        <h5 class="text-warning ml-3">Types</h5>
+        <ul class="list-group my-3">
+          <li class="list-group-item" [ngClass]="{active: shopParams.typeId === type.id}" *ngFor="let type of types" (click)="onTypeSelected(type.id)">{{type.name}}</li>
+        </ul>
+      </ng-container>
     </section>
 
     <section class="col-9">
@@ -23,7 +25,7 @@
           [pageNumber]="shopParams.pageNumber" 
           [pageSize]="shopParams.pageSize" [totalCount]="totalCount"
         ></app-paging-header>
-        <div class="form-inline mt-2">
+        <div class="form-inline mt-2" *ngIf="products">
           <input type="text" class="form-control mr-2" placeholder="Search" style="width:300px" #search (keyup.enter)="onSearch()">
           <button class="btn btn-outline-primary my-2" (click)="onSearch()">Search</button>
           <button class="btn btn-outline-success my-2 ml-2" (click)="onReset()">Reset</button>
