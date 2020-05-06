@@ -15,7 +15,11 @@ namespace API.Extensions
             // Adding a scoped generic service for dependency injection
             services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
 
+            // Adding basket Reposiory
+            services.AddScoped<IBasketRepository, BasketRepository>();
+
             // This has to be bleow the AddControllers() becuase we are configuring the APi Behavior, controllers have to be loaded first.
+            // This configuration has to do with how to throw model state errors.
             services.Configure<ApiBehaviorOptions>(options => {
                 options.InvalidModelStateResponseFactory = actionContext => 
                 {

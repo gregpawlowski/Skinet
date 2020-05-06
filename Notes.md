@@ -1575,3 +1575,53 @@ Common module gives us ngFOr etc...
 # Angular: Creating an Error Component
 
 Redirect users for 500 and 404 Errors
+
+
+# Adding a Basket - API
+* Adding Redis to the API
+* Creating the Basket repository and controller
+
+## Where to store the basket 
+* Database - everytime use updates, save it in the db and keep it there. But the downside is that users can add items and never come back. they will be there and stay there until purged.
+* Local Storage - Save it in the browser, downside is it's client side only. 
+* Cookie - Not used much anymore, especially with an API.
+* Redis - Redis is an in-memory data store. It's main purpose is to used for cacheing. Works on a key value pair storage.
+
+* * In memory data structoure store
+* * Supports stings, hashes, lists, sets etc..
+* * key/value store.
+
+Since it's stored in memory it's very very fast, but it takes snapshots and actually persists data. 
+If it does restart, it will reload the data.
+Data can be given a time to live, you can add an expire date, so that your data doesn't blow everything up.
+Great for cacheing data
+
+
+## Setting up Redis
+Install Redis in Infrastructure project.
+```xml
+    <PackageReference Include="StackExchange.Redis" Version="2.1.39"/>
+```
+
+Add it to the Startup Class:
+```C#
+      services.AddSingleton<ConnectionMultiplexer>( c => {
+        var configuration = ConfigurationOptions.Parse(_configuration.GetConnectionString("Redis"), true);
+        return ConnectionMultiplexer.Connect(configuration);
+      });
+```
+Redis acts as a Singleton. so we have to set it up as such
+We'll also have to add a connection string in out appsettings:
+```json
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost;Database=Skinet;Trusted_Connection=True;",
+    "Redis": "localhost"
+  },
+```
+
+We'll have to set up and run Redis Server on our computer.
+
+## Setting up Basket class
+
+
+## Installing Redis on Windows
