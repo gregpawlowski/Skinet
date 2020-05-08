@@ -2119,4 +2119,158 @@ When you have navigation properties there becomes an issue with Json conversion 
 To address this we can create a Dto withou the naviation properties.
 
 ```C# AddressDto
+
+```
+
+
+# Validation on API
+We need to be able to validate the information coming up from the client. 
+Server will throw errors in cases where we send up a n empty password so we have to guard against that.
+We want to confine our email to be an acutal email not just any string.
+We also want to make sure the server validates the basket and doesn't add a quanitty or price of 0
+
+## Model Validation
+Model validation is done with Attributes in Dtos, we can add it to the entities but that would be putting more responsibility on the netities and a dependency. We would do this in the entity configuration in the Data / Config folder in the Infrastructure project anyway. It's better to do the validation at the level where the data is being passsed in by the user.
+
+We already set up our error responses for modelstate error.
+
+For the Address we can validate on the Dtos. Our Dto's are part of the API project.
+
+```C#
+using System.ComponentModel.DataAnnotations;
+
+namespace API.Dtos
+{
+    public class AddressDto
+    {
+        [Required]
+        public string FirstName { get; set; }
+        [Required]
+        public string LastName { get; set; }
+        [Required]
+        public string Street { get; set; }
+        [Required]
+        public string City { get; set; }
+        [Required]
+        public string State { get; set; }
+        [Required]
+        public string ZipCode { get; set; }
+    }
+}
+```
+
+## Check for duplicate email addresses and passwords
+```C#
+using System.ComponentModel.DataAnnotations;
+
+namespace API.Dtos
+{
+    public class RegisterDto
+    {
+        [Required]
+        public string DisplayName { get; set; }
+        [Required]
+        [EmailAddress]
+        public string Email { get; set; }
+        [Required]
+        [RegularExpression("(?=^.{6,10}$)(?=.*\\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&amp;*()_+}{&quot;:;'?/&gt;.&lt;,])(?!.*\\s).*$")]
+        public string Password { get; set; }
+    }
+}
+```
+
+We can check if email already exists when the user registers by using our existing method:
+```C#
+   [HttpPost("register")]
+    public async Task<ActionResult<UserDto>> Register(RegisterDto registerDto)
+    {
+
+      if(CheckIfEmailExistsAsync(registerDto.Email).Result.Value)
+        return new BadRequestObjectResult(new ApiValidationErrorResponse{
+          Errors = new [] {
+            "Email address is in use"
+          }
+        });
+
+      var user = new AppUser
+      {
+        DisplayName = registerDto.DisplayName,
+        Email = registerDto.Email,
+        UserName = registerDto.Email
+      };
+
+      var result = await _userManager.CreateAsync(user, registerDto.Password);
+
+      if (!result.Succeeded)
+        return BadRequest(new ApiResponse(400));
+
+      return new UserDto
+      {
+        DisplayName = user.DisplayName,
+        Email = user.Email,
+        Token = _tokenService.createToken(user)
+      };
+    }
+```
+
+
+## Validating the basket
+Make sure quanitty is at least one, price is not lower than 0.
+
+
+## Updating Swagger Config for Identity
+Swagger currently doesn't know how to authenticate, so we can tell it what kind of authentication we're using for our protected routes.
+
+In Swagger Service Extensions:
+```C#
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.OpenApi.Models;
+
+namespace API.Extensions
+{
+    public static class SwaggerServiceExtensions
+    {
+        public static IServiceCollection AddSwaggerDocumentation(this IServiceCollection services)
+        {
+
+            services.AddSwaggerGen(c => 
+            {
+                // Version of API
+                c.SwaggerDoc("v1", new OpenApiInfo{ Title = "SkiNet API", Version ="v1"});
+
+                var securitySchema = new OpenApiSecurityScheme
+                {
+                    Description = "JWT Auth Bearer Scheme",
+                    Name = "Authorization",
+                    In = ParameterLocation.Header,
+                    Type = SecuritySchemeType.Http,
+                    Scheme = "bearer",
+                    Reference = new OpenApiReference
+                    {
+                        Type = ReferenceType.SecurityScheme,
+                        Id = "Bearer"
+                    }
+                };
+
+                c.AddSecurityDefinition("Bearer", securitySchema);
+
+                var securityRequirement = new OpenApiSecurityRequirement {{securitySchema, new [] { "Bearer"}}};
+
+                c.AddSecurityRequirement(securityRequirement);
+
+
+            });
+            return services;
+        }
+
+        public static IApplicationBuilder UseSwaggerDocumentation(this IApplicationBuilder app)
+        {
+            app.UseSwagger();
+            app.UseSwaggerUI(c => {c.SwaggerEndpoint("/swagger/v1/swagger.json", "SkiNet API v1");});
+
+            return app;
+        }
+    }
+}
 ```
