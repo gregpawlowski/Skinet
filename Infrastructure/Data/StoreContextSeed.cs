@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using Core.Entities;
 using System;
 using Microsoft.EntityFrameworkCore;
+using Core.Entities.OrderAggregate;
 
 namespace Infrastructure.Data
 {
@@ -68,6 +69,25 @@ namespace Infrastructure.Data
           }
 
           await context.SaveChangesAsync();
+        }
+
+        if (!context.DeliveryMethods.Any())
+        {
+          // Will be run from Program Class path.
+          var dmData = File.ReadAllText("../Infrastructure/Data/SeedData/delivery.json");
+
+          var deliveryMethods = JsonSerializer.Deserialize<List<DeliveryMethod>>(dmData);
+
+          foreach (var method in deliveryMethods)
+          {
+            context.DeliveryMethods.Add(method);
+          }
+
+          await context.Database.OpenConnectionAsync();
+          await context.Database.ExecuteSqlRawAsync("SET IDENTITY_INSERT DeliveryMethods ON");
+          await context.SaveChangesAsync();
+          await context.Database.ExecuteSqlRawAsync("SET IDENTITY_INSERT DeliveryMethods OFF");
+          context.Database.CloseConnection();
         }
       }
       catch (Exception ex)

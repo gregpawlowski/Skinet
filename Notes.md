@@ -2375,3 +2375,922 @@ Replay Subject is one that doesn't emit an inital value
 
 # Great tool for Regualr Expresssions
 http://regexlib.com/Search.aspx?k=password
+
+
+# API - Orders
+
+## Order Aggregate
+The order will be a more complex entity.
+We'll create a OrderAggregate folder and create several classes:
+
+Address
+This will be the address to ship to, not the customers address.
+It will not have an ID, it will live in our order table we'll create later.
+
+This entity will be owned by our Order it will not ahve it's own ID.
+We give it a constructor so we can create one with the properties.
+The parameter-less constructor is needed for entity framework.
+```C#
+namespace Core.Entities.OrderAggregate
+{
+    public class Address
+    {
+    public Address()
+    {
+    }
+    public Address(string firstName, string lastName, string street, string city, string state, string zipCode)
+    {
+      FirstName = firstName;
+      LastName = lastName;
+      Street = street;
+      City = city;
+      State = state;
+      ZipCode = zipCode;
+    }
+
+    public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Street { get; set; }
+        public string City { get; set; }
+        public string State { get; set; }
+        public string ZipCode { get; set; }
+    }
+}
+```
+
+DeliveryMethod
+The delivery method will have an ID, it will derive from the BaseEntity.
+This will be our available delivry methods for the customer to select.
+```C#
+namespace Core.Entities.OrderAggregate
+{
+    public class DeliveryMethod : BaseEntity
+    {
+        public string ShortName { get; set; }
+        public string DeliveryTime { get; set; }
+        public string Description { get; set; }
+        public decimal Price { get; set; }
+    }
+}
+```
+
+ProductItemOrdered
+Snapshot of the item at the time the order was placed. This will be used in our OrderItem table. This will not have it's own ID, rather it will be passed into the OrderItem table.
+```C#
+namespace Core.Entities.OrderAggregate
+{
+    public class ProductItemOrdered
+    {
+    public ProductItemOrdered()
+    {
+    }
+    public ProductItemOrdered(int productItemId, string productName, string pictureUrl)
+    {
+      ProductItemId = productItemId;
+      ProductName = productName;
+      PictureUrl = pictureUrl;
+    }
+
+    public int ProductItemId { get; set; }
+        public string ProductName { get; set; }
+        public string PictureUrl { get; set; }
+    }
+}
+```
+
+OrderItem
+OrderItem will include the item ordered, it will derive from BaseEntity and it will have it's own ID.
+```C#
+namespace Core.Entities.OrderAggregate
+{
+    public class OrderItem : BaseEntity
+    {
+    public OrderItem()
+    {
+    }
+
+    public OrderItem(ProductItemOrdered itemOrdered, decimal price, int quantity)
+    {
+      ItemOrdered = itemOrdered;
+      Price = price;
+      Quantity = quantity;
+    }
+
+    public ProductItemOrdered ItemOrdered { get; set; }
+        public decimal Price { get; set; }
+        public int Quantity { get; set; }
+    }
+}
+```
+
+OrderStatus
+This will be an enum that we'll use to get the status of the order. These are just flags.
+```C#
+using System.Runtime.Serialization;
+
+namespace Core.Entities.OrderAggregate
+{
+    public enum OrderStatus
+    {
+        [EnumMember(Value = "Pending")]
+        Pending,
+        [EnumMember(Value = "Payment Received")]
+        PaymentReceived,
+        [EnumMember(Value = "Payment Failed")]
+        PaymentFailed
+    }
+}
+```
+
+## Creating the Order Entity
+Now that we have all those classes we can create the Order.
+```C#
+using System;
+using System.Collections.Generic;
+
+namespace Core.Entities.OrderAggregate
+{
+    public class Order : BaseEntity
+    {
+    public Order()
+    {
+    }
+
+    public Order(IReadOnlyList<OrderItem> orderItems, string buyerEmail, Address shipToAddress, DeliveryMethod deliveryMethod, decimal subtotal)
+    {
+      BuyerEmail = buyerEmail;
+      ShipToAddress = shipToAddress;
+      DeliveryMethod = deliveryMethod;
+      OrderItems = orderItems;
+      Subtotal = subtotal;
+    }
+
+    // Orders will be pulled by BuyerEmial
+    public string BuyerEmail { get; set; }
+        // Ge the offset
+        public DateTimeOffset OrderDate { get; set; } = DateTimeOffset.Now;
+        public Address ShipToAddress { get; set; }
+        public DeliveryMethod DeliveryMethod { get; set; }
+        public IReadOnlyList<OrderItem> OrderItems { get; set; }
+        public decimal Subtotal { get; set; }
+        public OrderStatus Status { get; set; } = OrderStatus.Pending;
+        public string PaymentIntentId { get; set; }
+
+        public decimal GetTotal()
+        {
+            return Subtotal + DeliveryMethod.Price;
+        }
+    }
+}
+```
+
+## Configuring the Order Entity
+Owned types cannot exist on their own. They cannot be created on their own or have thier own DbSets. They are only creted as part of another entity.
+
+OrderConfiguration
+We have to configure our Enum so that we get the nice status instead of a int.
+We also configure the owned entity which is the ShipToAddress
+And we add the One to Many relationship with the Order Items.
+```C#
+using System;
+using Core.Entities.OrderAggregate;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace Infrastructure.Data.Config
+{
+  public class OrderConfiguration : IEntityTypeConfiguration<Order>
+  {
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+      builder.OwnsOne(o => o.ShipToAddress, a =>
+      {
+        a.WithOwner();
+      });
+
+      builder.Property(s => s.Status)
+        //Convert our enum to a string.
+        .HasConversion(o => o.ToString(), o => (OrderStatus)Enum.Parse(typeof(OrderStatus), o));
+
+      // If we delete an order we want to delte any Order Items.
+      builder.HasMany(o => o.OrderItems)
+          .WithOne()
+          .OnDelete(DeleteBehavior.Cascade);
+    }
+  }
+}
+```
+
+```C#
+using Core.Entities.OrderAggregate;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace Infrastructure.Data.Config
+{
+  public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
+  {
+    public void Configure(EntityTypeBuilder<OrderItem> builder)
+    {
+        builder.OwnsOne(i => i.ItemOrdered, io => io.WithOwner());
+
+        builder.Property(i => i.Price)
+            .HasColumnType("decimal(18,2)");
+    
+    }
+  }
+}
+```
+
+```C#
+using Core.Entities.OrderAggregate;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace Infrastructure.Data.Config
+{
+  public class DeliveryMethodConfiguration : IEntityTypeConfiguration<DeliveryMethod>
+  {
+    public void Configure(EntityTypeBuilder<DeliveryMethod> builder)
+    {
+      builder.Property(d => d.Price)
+        .HasColumnType("decimal(18,2)");
+    }
+  }
+}
+```
+
+
+## Store Context for DBSets and Seeding Data
+We're only adding the ones that are going to be DbSets here. Not the owned properties.
+```C# Store Context
+    public DbSet<Order> Orders { get; set; }
+    public DbSet<OrderItem> OrderItems { get; set; }
+    public DbSet<DeliveryMethod> DeliveryMethods { get; set; }
+```
+
+We need to Seed the data for our delivery Methods.
+```C# StoreContextSeed
+        if (!context.DeliveryMethods.Any())
+        {
+          // Will be run from Program Class path.
+          var dmData = File.ReadAllText("../Infrastructure/Data/SeedData/delivery.json");
+
+          var deliveryMethods = JsonSerializer.Deserialize<List<DeliveryMethod>>(dmData);
+
+          foreach (var method in deliveryMethods)
+          {
+            context.DeliveryMethods.Add(method);
+          }
+
+          await context.SaveChangesAsync();
+        }
+```
+
+## Creating an Order Service
+We want to keep the logic of this outside of the controllers. We don't want our controllers to become too big. The order process will need to use multiple repositories.
+
+Create Service Interface in Core
+
+```C# IOrderService
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Core.Entities.OrderAggregate;
+
+namespace Core.Interfaces
+{
+    public interface IOrderService
+    {
+         Task<Order> CreateOrderAsync(string buyerEmail, int deliveryMethod, string basketId, Address shippingAddress);
+         
+         Task<IReadOnlyList<Order>> GetOrdersForUserAsync(string buyerEmail);
+
+         Task<Order> GetOrderByIdAsync(int id, string buyerEmail);
+
+         Task<IReadOnlyList<DeliveryMethod>> GetDeliveryMethodsAsync();
+    }
+}
+```
+
+Now we will be implementing it in the Infrastructure project:
+The order service will have multiple methods to deal with our orders.
+```C#
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Core.Entities.OrderAggregate;
+using Core.Interfaces;
+
+namespace Infrastructure.Services
+{
+  public class OrderService : IOrderService
+  {
+    private readonly IBasketRepository _basketRepository;
+    private readonly IProductRepository _productRepository;
+    private readonly IGenericRepository<Order> _orderRepo;
+    private readonly IGenericRepository<DeliveryMethod> _deliveryMethodRepo;
+
+    public OrderService(
+        IBasketRepository basketRepository,
+        IProductRepository productRepository,
+        IGenericRepository<Order> orderRepo,
+        IGenericRepository<DeliveryMethod> deliveryMethodRepo
+    )
+    {
+      _productRepository = productRepository;
+      _orderRepo = orderRepo;
+      _deliveryMethodRepo = deliveryMethodRepo;
+      _basketRepository = basketRepository;
+    }
+
+    public async Task<Order> CreateOrderAsync(string buyerEmail, int deliveryMethodId, string basketId, Address shippingAddress)
+    {
+      // Get basket from repo.
+      var basket = await _basketRepository.GetBasketAsync(basketId);
+
+      // We can't trust the price in the basket, we'll have to take the price from the product.
+      // Get items from product repo
+      var items = new List<OrderItem>();
+
+      foreach (var item in basket.Items)
+      {
+        // Get the prodcut from the repository
+        var productItem = await _productRepository.GetProductByIdAsync(item.Id);
+
+        // Create the snapshot of hte item at this give moment in time.
+        var itemOrdered = new ProductItemOrdered(productItem.Id, productItem.Name, productItem.PictureUrl);
+
+        // Create the order item, taking the price and quantity fro mthe proudct in the database not the basket.
+        var orderItem = new OrderItem(itemOrdered, productItem.Price, item.Quantity);
+
+        items.Add(orderItem);
+      }
+
+      // Get the delivery method from repo
+      var deliveryMethod = await _deliveryMethodRepo.GetByIdAsync(deliveryMethodId);
+
+      // Calculat subtotal
+      var subtotal = items.Sum(item => item.Price * item.Quantity);
+
+      // Create order
+      var order = new Order(items, buyerEmail, shippingAddress, deliveryMethod, subtotal);
+
+      // Save the Order
+
+
+      // Return the order
+      return order;
+    }
+
+    public Task<IReadOnlyList<DeliveryMethod>> GetDeliveryMethodsAsync()
+    {
+      throw new System.NotImplementedException();
+    }
+
+    public Task<Order> GetOrderByIdAsync(int id, string buyerEmail)
+    {
+      throw new System.NotImplementedException();
+    }
+
+    public Task<IReadOnlyList<Order>> GetOrdersForUserAsync(string buyerEmail)
+    {
+      throw new System.NotImplementedException();
+    }
+  }
+}
+```
+
+Add the service to startup:
+```C#
+namespace API.Extensions
+{
+    public static class ApplicationServicesExtensions
+    {
+        public static IServiceCollection AddApplicationServices(this IServiceCollection services)
+        {
+            services.AddScoped<ITokenService, TokenService>();
+            services.AddScoped<IOrderService, OrderService>();
+...
+```
+
+
+
+## Adding Controller for Orders
+```C#
+using System.Threading.Tasks;
+using API.Dtos;
+using API.Errors;
+using API.Extensions;
+using AutoMapper;
+using Core.Entities.OrderAggregate;
+using Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace API.Controllers
+{
+  [Authorize]
+  public class OrdersController : BaseApiController
+  {
+    private readonly IOrderService _orderService;
+    private readonly IMapper _mapper;
+    public OrdersController(IOrderService orderService, IMapper mapper)
+    {
+      _mapper = mapper;
+      _orderService = orderService;
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<Order>> CreateOrder(OrderDto orderDto)
+    {
+        var email = HttpContext.User.RetrieveEmailFromPrincipal();
+
+        var address = _mapper.Map<AddressDto, Address>(orderDto.ShipToAddress);
+
+        var order = await _orderService.CreateOrderAsync(email, orderDto.DeliveryMethodId, orderDto.BasketId, address);
+
+        if (order == null)
+            return BadRequest(new ApiResponse(400, "Problem creating order"));
+        
+        return Ok(order);
+    }
+  }
+}
+```
+
+# Unit of Work Pattern.
+Currently:
+Positives:
+* We do not need to create additional repositories, we ahve a genric repository we can use for any entity. We will add more functionality to add.
+* Specification pattern - Clear, flexible and allows us to query for our data in the means we want it and still use a generic repository.
+
+Cons:
+* Could end up with partial updates
+* * Each repo has it's own verion of DbContext so when you save changes you can do it in one repo but not the other when saving changes
+* Injecting three repos into the controller!
+* Each repo creates it's own instance of dbContext
+
+This is where Unit Of Work comes in.
+
+Our Controller will have a Unit Of Work. Unit of work will create the DbContext and it will create the repositories as needed and each repository will share that same unit of work.
+
+1. Unit of Work (UoW) Creates DBContext instance
+2. Uniit of Work creates repositories as needed
+
+Example 
+
+```C#
+UoW.Repository<Product>.Add(product)
+UoW.Repository<productBrand>.Add(productBrand)
+
+// Save changes, all tracked changes in the UoW, it will save or fail all changes.
+UoW.Complete();
+```
+
+We will create transactions for each unit of work basically. UoW is all in a transaction.
+
+## Implementing Unit OF Work
+Create Interface
+```C#
+using System;
+using System.Threading.Tasks;
+using Core.Entities;
+
+namespace Core.Interfaces
+{
+  public interface IUnitOfWork : IDisposable
+  {
+    IGenericRepository<TEntity> Repository<TEntity>() where TEntity : BaseEntity;
+
+    Task<int> Complete();
+
+  }
+}
+```
+
+Implement
+```C#
+using System;
+using System.Collections;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+
+namespace Infrastructure.Data
+{
+  public class UnitOfWork : IUnitOfWork
+  {
+    private readonly StoreContext _context;
+    private Hashtable _repositories;
+    public UnitOfWork(StoreContext context)
+    {
+      _context = context;
+    }
+
+    public async Task<int> Complete()
+    {
+      return await _context.SaveChangesAsync();
+    }
+
+    public void Dispose()
+    {
+      _context.Dispose();
+    }
+
+    public IGenericRepository<TEntity> Repository<TEntity>() where TEntity : BaseEntity
+    {
+      if (_repositories == null) _repositories = new Hashtable();
+
+      // Get the name of the entity we are looking for
+      var type = typeof(TEntity).Name;
+
+      // See if this entitie already exists
+      if (!_repositories.ContainsKey(type))
+      {
+        // Entity doesn't exit we ahve to add it.
+        var repositoryType = typeof(GenericRepository<>);
+        // We'll create a generic repository instance, passing in the _context that we already injected in this class
+        var repositryInstance = Activator.CreateInstance(repositoryType.MakeGenericType(typeof(TEntity)), _context);
+
+        _repositories.Add(type, repositryInstance);
+      }
+
+      return (IGenericRepository<TEntity>) _repositories[type];
+    }
+  }
+}
+```
+
+## Updating Generic Repository for adding entities.
+```C# IGenericRepository
+        void Add(T entity);
+        
+        void Update(T entity);
+
+        void Delete(T entity);
+```
+
+The implementation of the Generic Repo.
+```C#
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+using Core.Specifications;
+using Microsoft.EntityFrameworkCore;
+
+namespace Infrastructure.Data
+{
+  public class GenericRepository<T> : IGenericRepository<T> where T : BaseEntity
+  {
+    private readonly StoreContext _context;
+    public GenericRepository(StoreContext context)
+    {
+      _context = context;
+    }
+
+    public async Task<T> GetByIdAsync(int id)
+    {
+      return await _context.Set<T>().FindAsync(id);
+    }
+
+    public async Task<IReadOnlyList<T>> ListAllAsync()
+    {
+      return await _context.Set<T>().ToListAsync();
+    }
+
+    public async Task<T> GetEntityWithSpec(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).FirstOrDefaultAsync();
+    }
+
+    public async Task<IReadOnlyList<T>> ListAsync(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).ToListAsync();
+    }
+
+    public async Task<int> CountAsync(ISpecification<T> spec)
+    {
+      return await ApplySpecification(spec).CountAsync();
+    }
+
+    private IQueryable<T> ApplySpecification(ISpecification<T> spec)
+    {
+      return SpecificationEvaluator<T>.GetQuery(_context.Set<T>().AsQueryable(), spec);
+    }
+
+    public void Add(T entity)
+    {
+      _context.Set<T>().Add(entity);
+    }
+
+    public void Update(T entity)
+    {
+      // Start tracking this entity
+      _context.Set<T>().Attach(entity);
+      // Tell eniity framework that the entity above has been modified and all or some of it's values have changed.
+      _context.Entry(entity).State = EntityState.Modified;
+    }
+
+    public void Delete(T entity)
+    {
+      _context.Set<T>().Remove(entity);
+    }
+  }
+}
+```
+
+## Refactoring OrderService to use the new UnitOfWork and Repo Methods
+```C#
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Entities.OrderAggregate;
+using Core.Interfaces;
+
+namespace Infrastructure.Services
+{
+  public class OrderService : IOrderService
+  {
+    private readonly IBasketRepository _basketRepository;
+    private readonly IUnitOfWork _unitOfWork;
+    public OrderService(IBasketRepository basketRepository, IUnitOfWork unitOfWork)
+    {
+      _unitOfWork = unitOfWork;
+      _basketRepository = basketRepository;
+    }
+
+    public async Task<Order> CreateOrderAsync(string buyerEmail, int deliveryMethodId, string basketId, Address shippingAddress)
+    {
+      // Get basket from repo.
+      var basket = await _basketRepository.GetBasketAsync(basketId);
+
+      // We can't trust the price in the basket, we'll have to take the price from the product.
+      // Get items from product repo
+      var items = new List<OrderItem>();
+
+      foreach (var item in basket.Items)
+      {
+        // Get the prodcut from the repository
+        var productItem = await _unitOfWork.Repository<Product>().GetByIdAsync(item.Id);
+
+        // Create the snapshot of hte item at this give moment in time.
+        var itemOrdered = new ProductItemOrdered(productItem.Id, productItem.Name, productItem.PictureUrl);
+
+        // Create the order item, taking the price and quantity fro mthe proudct in the database not the basket.
+        var orderItem = new OrderItem(itemOrdered, productItem.Price, item.Quantity);
+
+        items.Add(orderItem);
+      }
+
+      // Get the delivery method from repo
+      var deliveryMethod = await _unitOfWork.Repository<DeliveryMethod>().GetByIdAsync(deliveryMethodId);
+
+      // Calculat subtotal
+      var subtotal = items.Sum(item => item.Price * item.Quantity);
+
+      // Create order
+      var order = new Order(items, buyerEmail, shippingAddress, deliveryMethod, subtotal);
+
+      // Save the Order
+      _unitOfWork.Repository<Order>().Add(order);
+
+      var result = await _unitOfWork.Complete();
+
+      if (result <= 0)
+        return null;
+      
+      // Delete bacsket
+      await _basketRepository.DeleteBasketAsync(basketId);
+      // Return the order
+      return order;
+    }
+
+    public Task<IReadOnlyList<DeliveryMethod>> GetDeliveryMethodsAsync()
+    {
+      throw new System.NotImplementedException();
+    }
+
+    public Task<Order> GetOrderByIdAsync(int id, string buyerEmail)
+    {
+      throw new System.NotImplementedException();
+    }
+
+    public Task<IReadOnlyList<Order>> GetOrdersForUserAsync(string buyerEmail)
+    {
+      throw new System.NotImplementedException();
+    }
+  }
+}
+```
+
+## Implementing Order Get methods
+In the order service we now can add the methods to get the data
+We'll aslo create a new specifican.
+```C#
+    public async Task<IReadOnlyList<DeliveryMethod>> GetDeliveryMethodsAsync()
+    {
+      return await _unitOfWork.Repository<DeliveryMethod>().ListAllAsync();
+    }
+
+    public async Task<Order> GetOrderByIdAsync(int id, string buyerEmail)
+    {
+      // We need to add Eager loading for Orders. Need a new specification.
+      // Sort them by date as well so we need a new specification.
+      var spec = new OrdersWithItemsAndOrderingSpecification(id, buyerEmail);
+
+      return await _unitOfWork.Repository<Order>().GetEntityWithSpec(spec);
+    }
+
+    public async Task<IReadOnlyList<Order>> GetOrdersForUserAsync(string buyerEmail)
+    {
+      var spec = new OrdersWithItemsAndOrderingSpecification(buyerEmail);
+
+      return await _unitOfWork.Repository<Order>().ListAsync(spec);
+    }
+```
+
+```C#
+using System;
+using System.Linq.Expressions;
+using Core.Entities.OrderAggregate;
+
+namespace Core.Specifications
+{
+  public class OrdersWithItemsAndOrderingSpecification : BaseSpecification<Order>
+  {
+    public OrdersWithItemsAndOrderingSpecification(string email) : base(o => o.BuyerEmail == email)
+    {
+        AddInclude(o => o.DeliveryMethod);
+        AddInclude(o => o.OrderItems);
+        AddOrderByDescending(o => o.OrderDate);
+    }
+
+    public OrdersWithItemsAndOrderingSpecification(int id, string email) : base(o => o.Id == id && o.BuyerEmail == email)
+    {
+        AddInclude(o => o.DeliveryMethod);
+        AddInclude(o => o.OrderItems);
+    }
+  }
+}
+```
+
+## Shaping Data For Orders
+We want to flatten some data.
+We'll create Dtos from it
+
+```C# OrderToReturnDto
+using System;
+using System.Collections.Generic;
+using Core.Entities.OrderAggregate;
+
+namespace API.Dtos
+{
+  public class OrderToReturnDto
+  {
+    public int Id { get; set; }
+    public string BuyerEmail { get; set; }
+    public DateTimeOffset OrderDate { get; set; } 
+    public Address ShipToAddress { get; set; }
+    public string DeliveryMethod { get; set; }
+    public decimal ShippingPrice { get; set; }
+    public IReadOnlyList<OrderItemDto> OrderItems { get; set; }
+    public decimal Subtotal { get; set; }
+    public decimal Total { get; set; }
+    public string Status { get; set; }
+  }
+}
+```
+
+```C# OrderItemDto
+namespace API.Dtos
+{
+    public class OrderItemDto
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; }
+        public string PictureUrl { get; set; }
+        public decimal Price { get; set; }
+        public int Quantity { get; set; }
+    }
+}
+```
+
+Create mapping profiles for thes:
+```C#
+        CreateMap<Order, OrderToReturnDto>();
+        CreateMap<OrderItem, OrderItemDto>();
+```
+Adjust the methods in the controller to return the Dtos now.
+
+```C#
+return Ok(_mapper.Map<OrderToReturnDto>(order));
+```
+
+Some data will be missing because we still have to configure some data.
+
+## AutoMapper Config
+Automapper will look for methods to configure properties.
+For example if you have a total proerty and have a GetTotal() method, AutoMapper will be able to map the return value of GetTotal to the property total.
+
+```C#
+        CreateMap<Order, OrderToReturnDto>()
+          .ForMember(d => d.DeliveryMethod, o => o.MapFrom(s => s.DeliveryMethod.ShortName))
+          .ForMember(d => d.ShippingPrice, o => o.MapFrom(s => s.DeliveryMethod.Price));
+        CreateMap<OrderItem, OrderItemDto>()
+          .ForMember(d => d.ProductId, o => o.MapFrom(s => s.ItemOrdered.ProductItemId))
+          .ForMember(d => d.ProductName, o => o.MapFrom(s => s.ItemOrdered.ProductName))
+          .ForMember(d => d.PictureUrl, o => o.MapFrom(s => s.ItemOrdered.PictureUrl))
+          .ForMember(d => d.PictureUrl, o => o.MapFrom<OrderItemUrlResolver>());
+```
+
+Value Resolver to popualte the full URL for this map
+```C#
+using API.Dtos;
+using AutoMapper;
+using Core.Entities.OrderAggregate;
+using Microsoft.Extensions.Configuration;
+
+namespace API.Helpers
+{
+  public class OrderItemUrlResolver : IValueResolver<OrderItem, OrderItemDto, string>
+  {
+    private readonly IConfiguration _config;
+    public OrderItemUrlResolver(IConfiguration config)
+    {
+      _config = config;
+    }
+
+    public string Resolve(OrderItem source, OrderItemDto destination, string destMember, ResolutionContext context)
+    {
+      if (!string.IsNullOrEmpty(source.ItemOrdered.PictureUrl))
+      {
+          return _config["ApiUrl"] + source.ItemOrdered.PictureUrl;
+      }
+
+      return null;
+    }
+  }
+}
+```
+
+## SQLite DateTime Offset
+SQLite will not allow DateTimeOffset so we need to convert the dates to soemthing it can deal with. 
+SQL Server is fine, we'll convert the data to binary for SQLite.
+```C#
+using System;
+using System.Linq;
+using System.Reflection;
+using Core.Entities;
+using Core.Entities.OrderAggregate;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+
+namespace Infrastructure.Data
+{
+  public class StoreContext : DbContext
+  {
+    public StoreContext(DbContextOptions<StoreContext> options) : base(options) {}
+
+    public DbSet<Product> Products { get; set; }
+    public DbSet<ProductBrand> ProductBrands { get; set; }
+    public DbSet<ProductType> ProductTypes { get; set; }
+    public DbSet<Order> Orders { get; set; }
+    public DbSet<OrderItem> OrderItems { get; set; }
+    public DbSet<DeliveryMethod> DeliveryMethods { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+      base.OnModelCreating(modelBuilder);
+      modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+      // This si for SQLite only, it doesn't support decimal, they will be converted to doubles and return doubles instead of decimal.
+      if (Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+      {
+        // Loop over all entities
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+          // get all properties of the entity that have a decimal propety type
+          var properties = entityType.ClrType.GetProperties().Where(p => p.PropertyType == typeof(decimal));
+          // Get all properties that have a DateTimeOffset
+          var dateTimeProperties = entityType.ClrType.GetProperties().Where(p => p.PropertyType == typeof(DateTimeOffset));
+
+          // Loop over the propeties that have decimals
+          // For each one set the conversion to double.
+          foreach (var property in properties)
+          {
+            modelBuilder.Entity(entityType.Name).Property(property.Name).HasConversion<double>();
+          }
+
+          foreach (var property in dateTimeProperties)
+          {
+            modelBuilder.Entity(entityType.Name).Property(property.Name).HasConversion(new DateTimeOffsetToBinaryConverter());
+          }
+        }
+      }
+    }
+  }
+}
+```
