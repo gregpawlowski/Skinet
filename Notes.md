@@ -3294,3 +3294,9 @@ namespace Infrastructure.Data
   }
 }
 ```
+
+# Client Multi-Step Wizard
+We will use Angular CDKStepper
+`ng add @angular/cdk`
+
+Create stepper as a shared component.
