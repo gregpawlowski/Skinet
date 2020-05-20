@@ -3300,3 +3300,386 @@ We will use Angular CDKStepper
 `ng add @angular/cdk`
 
 Create stepper as a shared component.
+
+
+
+# Payment on API And Client
+Goal: To be able to accept payments securely globally that complies with EU regulations and PCI DSS regulations.
+
+* Creating a Stripe Account
+* PCI DSS Compliance
+* Strong Customer Authentication
+* Payment Intents
+* Using Stripe Elements (Credit Card Fields)
+* Validating Cards
+* Confirming Card Payment
+* Webhooks - Allows to recieve confirmation from stipe directly into API
+
+
+## PCI Complaince
+Payment Card Industry Data Security Standard (PCI DSS)
+All credit cards follow a set of standards
+* Set of industry standards
+* Designed to protect payment card Dta
+* Increased protection for customers and reduced risk of data breaches involving personal card data
+
+12 broad requirements adn collectively more than 100 line item requirements you need to meet if you're going to store people's credit cards.
+
+There are 6 key areas:
+* Building and maintaining a secure network
+* Protecting cardholder data
+* Maintaining a vulnerability management program
+* Impelmenting strong access and control measures
+* Regular montior and test networks
+* Maintaining an information security policy.
+
+We will use Stripe, they do the hard work to follow PCI Complaince.
+
+
+Consequences for not meeting PCI Complaince 
+* Montly financial penaties from $5000 to 100,000 
+* Infringement consequences ($50 to 90$ per card hodler whose information has been endangered)
+* Compensation costs 
+* Legal Action
+* Damaged reptuation
+* Federal audits
+
+## Strong Customer Authentication
+* EU Standards for authenticating online payments
+Around since September 2019
+* Requires two of three elements:
+* * Something customer knowns (password or pin)
+* * Something the customer has (phone or hardware token)
+* * Something the customer is (fingerprint or facial recognition)
+
+Typically a password and text message or soemthing
+
+* If these are not implemented banks wil decline payments that require SCA and don't meet the criteria.
+
+Stripe without SCA would still be useful for (USA and Canadian payemnts)
+
+
+FLOWS:
+
+USA And Canada:
+Customer click Submit
+Order gets created on the API
+API returns the order if successful
+Payment is sent to Stripe
+Stripe returns a one time use token i payment succeeds.
+Client sends token to API
+API verifies token with Stripe
+Stripe confirms token
+We can then tell the client we recieved the payment and send that from the API
+
+In this flow we never touch the user's credit cards.
+
+SCA Flow: (Accept payments globally)
+1. Create a payment intent with the API (before payment)
+* * can be done when user adds items to basket or when they go to checkout
+2. API sends a payment intent to strip
+3. Strip sends back a payemtn intent along with a client secret
+4. API returns the client secret to the client
+* Customer can leave or come back, if they add items to basket we have to update the payment intetn
+5. Client creates order with API
+6. On success client sends paymetn to Strip using the client secret.
+7. Strip sends confirmation to client payment was successful
+8. We need to utilize webhooks and Stripe will send confirmation to API that payment was successful. 
+9. Payment confirmaed and can be shipped.
+
+## Starting Stripe 
+Need to add Stripe NugetPackage
+
+Add to infrastructure Project:
+`<PackageReference Include="Stripe.net" Version="36.12.2"/>`
+
+Add keys to configuration setting:
+Appsettings.json
+
+```json
+  "StripeSettings": {
+    "PublishableKey": "pk_test_mAWLDrJG8JwiFMbH8FxblEbo00laHP2cQY",
+    "SecretKey": "sk_test_DX8mJkB9EyTh4mf75XU572HH00Ge8DlBx0"
+  },
+```
+Create a service to handle payments:
+First set up the Interface:
+
+```C#
+using System.Threading.Tasks;
+using Core.Entities;
+
+namespace Core.Interfaces
+{
+    public interface IPaymentService
+    {
+        Task<CustomerBasket> CreateOrUpdatePaymentIntent(string basketId);
+    }
+}
+```
+
+Create implementation:
+```C#
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+
+namespace Infrastructure.Services
+{
+  public class PaymentService : IPaymentService
+  {
+    public Task<CustomerBasket> CreateOrUpdatePaymentIntent(string basketId)
+    {
+      throw new System.NotImplementedException();
+    }
+  }
+}
+```
+
+Add service to application services so that it's injectable:
+```C#
+using System.Linq;
+using API.Errors;
+using Core.Interfaces;
+using Infrastructure.Data;
+using Infrastructure.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace API.Extensions
+{
+    public static class ApplicationServicesExtensions
+    {
+        public static IServiceCollection AddApplicationServices(this IServiceCollection services)
+        {
+            services.AddScoped<ITokenService, TokenService>();
+            services.AddScoped<IOrderService, OrderService>();
+            services.AddScoped<IPaymentService, PaymentService>();
+            ...
+```
+
+## Implementing Payment Intent
+```C#
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Entities.OrderAggregate;
+using Core.Interfaces;
+using Microsoft.Extensions.Configuration;
+using Stripe;
+using Product = Core.Entities.Product;
+
+namespace Infrastructure.Services
+{
+  public class PaymentService : IPaymentService
+  {
+    private readonly IBasketRepository _basketRepository;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IConfiguration _config;
+    public PaymentService(IBasketRepository basketRepository, IUnitOfWork unitOfWork, IConfiguration config)
+    {
+      _config = config;
+      _unitOfWork = unitOfWork;
+      _basketRepository = basketRepository;
+    }
+
+    public async Task<CustomerBasket> CreateOrUpdatePaymentIntent(string basketId)
+    {
+      StripeConfiguration.ApiKey = _config["StripeSettings:SecretKey"];
+
+      var basket = await _basketRepository.GetBasketAsync(basketId);
+
+      var shippingPrice = 0m;
+
+      if (basket.DeliveryMethodId.HasValue) 
+      {
+        var deliveryMethod = await _unitOfWork.Repository<DeliveryMethod>().GetByIdAsync((int)basket.DeliveryMethodId);
+        shippingPrice = deliveryMethod.Price;
+      }
+
+      foreach(var item in basket.Items)
+      {
+        var productItem = await _unitOfWork.Repository<Product>().GetByIdAsync(item.Id);
+
+        if (item.Price != productItem.Price) 
+        {
+          item.Price = productItem.Price;
+        }
+      }
+
+      var service = new PaymentIntentService();
+      PaymentIntent intent;
+
+      // Check if we have a payment intent, if we don't then we have to create one.
+      if (string.IsNullOrEmpty(basket.PaymentIntentId))
+      {
+        var options = new PaymentIntentCreateOptions
+        {
+          Amount = (long) basket.Items.Sum(i => i.Quantity * (i.Price * 100)) + (long) shippingPrice * 100,
+          Currency = "usd",
+          PaymentMethodTypes = new List<string>{"card"}
+        };
+
+        // Get the payment intent from Stripe
+        intent = await service.CreateAsync(options);
+
+        basket.PaymentIntentId = intent.Id;
+        basket.ClientSecret = intent.ClientSecret;
+      } else {
+        // If the payament intetn exists we just have to update the amount
+        var options = new PaymentIntentUpdateOptions
+        {
+          Amount = (long) basket.Items.Sum(i => i.Quantity * (i.Price * 100)) + (long) shippingPrice * 100
+        };
+
+        await service.UpdateAsync(basket.PaymentIntentId, options);
+      }
+
+      // Update the basket.
+      await _basketRepository.UpdateBasketAsync(basket);
+
+      return basket;
+    }
+  }
+}
+```
+
+## Creating a Payment Controller
+```C#
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace API.Controllers
+{
+  public class PaymentsController : BaseApiController
+  {
+    private readonly IPaymentService _paymentService;
+    public PaymentsController(IPaymentService paymentService)
+    {
+      _paymentService = paymentService;
+    }
+
+    [Authorize]
+    [HttpPost("{basketId}")]
+    public async Task<ActionResult<CustomerBasket>> CreateOrUpdatePaymentIntent(string basketId)
+    {
+        return await _paymentService.CreateOrUpdatePaymentIntent(basketId);
+    }
+  }
+}
+```
+
+## Adding Stripe to Client
+in index.html
+```html
+<body>
+  <app-root></app-root>
+  <script scr="https://js.stripe.com/v3/"></script>
+</body>
+```
+
+
+## Fixing problem
+When we create an Order we will save the PaymentIntentId
+
+## Telling the server the payment was successful (Webhooks)
+Right now we submit an order and then there is no way for our API to know that the order was successful.
+The basket hangs around event though we delete it locally
+
+We need to listent to stripe to tell us that the payment was successful
+
+We will create an enpoint that stripe can use to send events to. We will get the body and convert it to a stripeEvent. It will make sure that our signature matches when converting. 
+
+```C#
+    [HttpPost("webook")]
+    public async Task<ActionResult> StripeWebhook()
+    {
+      var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
+
+      var stripeEvent = EventUtility.ConstructEvent(json, Request.Headers["Stripe-Signature"], WhSecret);
+
+      PaymentIntent intent;
+      Order order;
+
+      switch (stripeEvent.Type)
+      {
+        case "payment_intent_succeeded":
+          intent = (PaymentIntent) stripeEvent.Data.Object;
+          _logger.LogInformation("Payment Succeeded", intent.Id);
+          // TODO: Update our order with new status
+          break;
+        case "payment_intent_payment_failed":
+          intent = (PaymentIntent) stripeEvent.Data.Object;
+          _logger.LogInformation("Payment failed", intent.Id);
+          // TODO: Update our order status
+          break;
+      }
+
+      return new EmptyResult();
+    }
+```
+
+## Updating order after recieving webhook
+```C#
+using System.Threading.Tasks;
+using Core.Entities;
+using Core.Entities.OrderAggregate;
+
+namespace Core.Interfaces
+{
+    public interface IPaymentService
+    {
+        Task<CustomerBasket> CreateOrUpdatePaymentIntent(string basketId);
+        Task<Order> UpdateOrderPaymentSucceeded(string paymentIntentId);
+        Task<Order> UpdateOrderPaymentFailed(string paymentIntentId);
+    }
+}
+```
+
+```C#
+    public async Task<Core.Entities.OrderAggregate.Order> UpdateOrderPaymentFailed(string paymentIntentId)
+    {
+      var spec = new OrderByPaymentIntentIdSpecification(paymentIntentId);
+
+      var order = await _unitOfWork.Repository<Core.Entities.OrderAggregate.Order>().GetEntityWithSpec(spec);
+
+      if (order == null)
+        return null;
+
+      order.Status = OrderStatus.PaymentFailed;
+
+      await _unitOfWork.Complete();
+
+      return order;
+    }
+
+    public async Task<Core.Entities.OrderAggregate.Order> UpdateOrderPaymentSucceeded(string paymentIntentId)
+    {
+      var spec = new OrderByPaymentIntentIdSpecification(paymentIntentId);
+
+      var order = await _unitOfWork.Repository<Core.Entities.OrderAggregate.Order>().GetEntityWithSpec(spec);
+
+      if (order == null)
+        return null;
+
+      order.Status = OrderStatus.PaymentReceived;
+
+      _unitOfWork.Repository<Core.Entities.OrderAggregate.Order>().Update(order);
+      await _unitOfWork.Complete();
+
+      return null;
+    }
+```
+
+## Testing Stipe Webhooks
+Install CLI
+Add the secret aafter logging in
+
+# Performance
+
+## Caching
+

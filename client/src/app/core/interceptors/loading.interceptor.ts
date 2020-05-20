@@ -15,9 +15,15 @@ export class LoadingInterceptor implements HttpInterceptor {
   constructor(private busyService: BusyService) {}
 
   intercept(request: HttpRequest<unknown>, next: HttpHandler): Observable<HttpEvent<unknown>> {
-    if (!request.url.includes('emailexists')) {
-      this.busyService.busy();
+    // Don't turn on loading for HTTP reaust used for Async Validator
+    if (request.url.includes('emailexists')) {
+      return next.handle(request);
     }
+    // Turn off loading for creation of orders, there is a local loading indcator in the component
+    if (request.method === 'POST' && request.url.includes('orders')) {
+      return next.handle(request);
+    }
+    this.busyService.busy();
     return next.handle(request)
       .pipe(
         delay(1000),

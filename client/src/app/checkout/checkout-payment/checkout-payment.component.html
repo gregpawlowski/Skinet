@@ -1,11 +1,30 @@
-<p>checkout-payment works!</p>
+<div class="mt-4" [formGroup]="checkoutForm">
+  <div class="row">
+    <div class="form-group col-12" formGroupName="paymentForm">
+      <app-text-input formControlName="nameOnCard" label="Name on Card"></app-text-input>
+    </div>
+    <div class="form-group col-6">
+      <div class="form-control py-3" #cardNumber></div>
+      <ng-container *ngIf="cardErrors">
+        <span class="invalid-feedback" style="display:block">{{cardErrors}}</span>
+      </ng-container>
+    </div>
+    <div class="form-group col-3">
+      <div class="form-control py-3" #cardExpiry></div>
+    </div>
+    <div class="form-group col-3">
+      <div class="form-control py-3" #cardCvc></div>
+    </div>
+  </div>
+</div>
 
 <div class="float-none d-flex justify-content-between flex-column flex-lg-row mb-5">
   <button class="btn btn-outline-primary" cdkStepperPrevious>
     <i class="fa fa-angle-left"></i> Back to Review
   </button>
-  <button class="btn btn-primary" (click)="submitOrder()">
+  <button class="btn btn-primary" (click)="submitOrder()" [disabled]="loading || checkoutForm.get('paymentForm').invalid || !cardNumberValid || !cardExpiryValid || !cardCvcValid">
     Submit Order 
-    <i class="fa fa-angle-right"></i>
+    <i class="fa fa-angle-right"></i> 
+    <i class="fa fa-spinner fa-spin" *ngIf="loading"></i>
   </button>
 </div>
