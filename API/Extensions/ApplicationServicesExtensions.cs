@@ -23,6 +23,9 @@ namespace API.Extensions
             // Adding basket Reposiory
             services.AddScoped<IBasketRepository, BasketRepository>();
 
+            // Add caching as a singleton
+            services.AddSingleton<IResponseCacheService, ResponseCacheService>();
+
             // This has to be bleow the AddControllers() becuase we are configuring the APi Behavior, controllers have to be loaded first.
             // This configuration has to do with how to throw model state errors.
             services.Configure<ApiBehaviorOptions>(options => {

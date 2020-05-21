@@ -3,5 +3,7 @@
   [totalItems]="totalCount"
   [itemsPerPage]="pageSize"
   (pageChanged)="onPageChanged($event)"
-  previousText="&lsaquo;" nextText="&rsaquo;" firstText="&laquo;" lastText="&raquo;">
+  previousText="&lsaquo;" nextText="&rsaquo;" firstText="&laquo;" lastText="&raquo;"
+  [ngModel]="pageNumber"
+  >
 </pagination>

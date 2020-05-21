@@ -3680,6 +3680,202 @@ Install CLI
 Add the secret aafter logging in
 
 # Performance
+Best way to make a big difference with minimal effort is to enable caching.
 
-## Caching
+## Caching on API
+Respoonses from the database will be cached so we don't have to ask the controller or database.
 
+```C#
+using System;
+using System.Threading.Tasks;
+
+namespace Core.Interfaces
+{
+    public interface IResponseCacheService
+    {
+        Task CacheResponseAsync(string cacheKey, object response, TimeSpan timeToLive);
+        
+        Task<string> GetCachedResponseAsync(string cacheKey);
+    }
+}
+```
+
+Implementation
+```C#
+using System;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Core.Interfaces;
+using StackExchange.Redis;
+
+namespace Infrastructure.Services
+{
+  public class ResponseCacheService : IResponseCacheService
+  {
+    private readonly IDatabase _database;
+    public ResponseCacheService(IConnectionMultiplexer redis)
+    {
+      _database = redis.GetDatabase();
+    }
+
+    public async Task CacheResponseAsync(string cacheKey, object response, TimeSpan timeToLive)
+    {
+      if (response == null)
+        return;
+
+      var options = new JsonSerializerOptions
+      {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+      };
+
+      var serializedResponse = JsonSerializer.Serialize(response, options);
+
+      await _database.StringSetAsync(cacheKey, serializedResponse, timeToLive);
+    }
+
+    public async Task<string> GetCachedResponseAsync(string cacheKey)
+    {
+      var cachedResponse = await _database.StringGetAsync(cacheKey);
+
+      if (cachedResponse.IsNullOrEmpty)
+        return null;
+
+      return cachedResponse;
+    }
+  }
+}
+```
+
+Application servies:
+```C#
+            // Add caching as a singleton
+            services.AddSingleton<IResponseCacheService, ResponseCacheService>();
+```
+
+## Creating attribute for caching
+In Helpers
+
+Fitlers allow code to be run before or after specific stages in the request processing pipeline.
+We can sure before an action method is called or after a method has been exceuted.
+
+Before the actino is executed we want to check if we have it in the cache. And after the action is executed we want to cache the result.
+
+```C#
+using System;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Core.Interfaces;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace API.Helpers
+{
+  public class CachedAttribute : Attribute, IAsyncActionFilter
+  {
+    private readonly int _timeToLiveInSeconds;
+    public CachedAttribute(int timeToLiveInSeconds)
+    {
+      _timeToLiveInSeconds = timeToLiveInSeconds;
+    }
+
+    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    {
+        var cacheService = context.HttpContext.RequestServices.GetRequiredService<IResponseCacheService>();
+
+        // generate a key
+        var cacheKey = GenerateCacheKeyFromRequest(context.HttpContext.Request);
+        
+        // See if the response is cached already
+        var cachedResponse = await cacheService.GetCachedResponseAsync(cacheKey);
+
+        // If we have a respone from redis then retunr the resposne without goin to the controller
+        if (!string.IsNullOrEmpty(cachedResponse)) {
+            var contentResult = new ContentResult
+            {
+                Content = cachedResponse,
+                ContentType = "application/json",
+                StatusCode = 200
+            };
+
+            context.Result = contentResult;
+
+            return;
+        }
+
+        // Move to the controller
+        var executedContext = await next();
+
+        // The executed context is OK we can put it in the cache.
+        if (executedContext.Result is OkObjectResult okObjectResult)
+        {
+            await cacheService.CacheResponseAsync(cacheKey, okObjectResult.Value, TimeSpan.FromSeconds(_timeToLiveInSeconds));
+        }
+
+    }
+
+    private  string GenerateCacheKeyFromRequest(HttpRequest request)
+    {
+        // Organize the queryparams
+        var keyBuilder = new StringBuilder();
+        keyBuilder.Append($"{request.Path}");
+        foreach (var (key, value) in request.Query.OrderBy(x => x.Key))
+        {
+            keyBuilder.Append($"|{key}-{value}");
+        }
+
+        return keyBuilder.ToString();
+    }
+  }
+}
+```
+
+## Testing The API Cache
+
+Add the attributes to the controllers
+
+The rpoducts brands etc can be cached:
+```C#
+[Cached(600)]
+```
+
+
+# Client Side Performance
+Currently when we click on a product we laod the product, when we go to the shop we load products again.
+
+Data that is in components is thrown away right away when the component is closed.
+
+
+Products, Brands and Types are pretty static. Right now we are going to the API and getting products every time.
+A better way is to store this data in the service.
+
+We can add properties for the data
+```ts
+  products: IProduct[];
+  brands: IBrand[];
+  types: IType[];
+```
+
+and then we can change our methods to check if we already have the data 
+```ts
+  getProduct(id: number) {
+    const product = this.products.find(p => p.id === id);
+
+    // If we have the product in our cache we can return it.
+    if (product) {
+      return of(product);
+    }
+    return this.http.get<IProduct>(this.baseUrl + 'products/' + id);
+  }
+```
+
+However caching for paginated results will be harder.
+Our getProducts gets only paginated products, not all of them.
+
+We will move our shopParams and Pagination into the shop service from the shop component.
+
+```ts
+
+```
