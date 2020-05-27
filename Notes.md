@@ -3879,3 +3879,440 @@ We will move our shopParams and Pagination into the shop service from the shop c
 ```ts
 
 ```
+
+
+
+# Publishing
+
+## Angular Build Configuration
+angular.json holds the build configuaration
+
+Some features:
+* Replace production.dev with production
+* Output hashing to cache bust
+* Minimize and optimize
+* Don't include source maps
+* Css will be extracted from global styles into css files
+* AOT = ahead of time compilation, no more compiler, drastically reduce file size.
+
+When building angular will compile two version:
+ES2015 for modern browsers and ES5 for internet explorer
+
+## Angular config changes
+* CHeck the environment.prod and environment file.
+
+Remove the URL for production because the app will be served from kestrel on our server.
+```ts
+export const environment = {
+  production: true,
+  apiUrl: 'api/'
+};
+```
+
+* Remove any delay for production
+
+* Angular.json
+Order of styles is not respected by build tools
+Take all styles out of the array in angular.json and add them to your styles.scss
+```css
+@import "../node_modules/bootstrap/dist/css/bootstrap.min.css";
+@import "../node_modules/ngx-bootstrap/datepicker/bs-datepicker.css";
+@import "../node_modules/bootswatch/dist/united/bootstrap.min.css";
+@import "../node_modules/font-awesome/css/font-awesome.min.css";
+@import "../node_modules/ngx-toastr/toastr.css";
+```
+
+* Change output path
+We want to pulish to API/wwwroot
+```json
+"outputPath": "../API/wwwroot",
+```
+
+* Move images from wwwroot into a new folder called Content
+Currently we are serving images from wwwroot folder we need to move them to a different folder because wwwroot will be used for angualar and angular will be cleaning up that directory on each build. 
+
+* Fix Startup to serve Images from Content
+
+```C#
+      // Serve anything inside wwwroot
+      app.UseStaticFiles();
+
+      // Anything going for content will go to Content folder
+      app.UseStaticFiles(new StaticFileOptions
+      {
+        FileProvider = new PhysicalFileProvider(Path.Combine(Directory.GetCurrentDirectory(), "Content")),
+        RequestPath = "/content"
+      });
+```
+
+* Update the API URL
+In appsettingss.Development.json
+```C#
+ "ApiUrl": "https://localhost:5001/Content/",
+```
+
+* Tell API about Endpoints for angular so that API doesnt try to route Angualr
+```C#
+      app.UseEndpoints(endpoints =>
+      {
+        endpoints.MapControllers();
+        // Add a fallback controller to server angualr for any routes that are not found.
+        endpoints.MapFallbackToController("Index", "Fallback");
+      });
+```
+
+```C#
+using System.IO;
+using Microsoft.AspNetCore.Mvc;
+
+namespace API.Controllers
+{
+    public class FallbackController : Controller
+    {
+        public IActionResult Index() 
+        {
+            return PhysicalFile(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "index.html"), "text/HTML");
+        }
+    }
+}
+```
+
+## Building Angular
+The build engine in Angualr 9 is IVY. No longer experimental.
+
+The vendor file includes the angular compiler but the production version should use Ahead of Time compilation, remove the compiler and the bundles should be much much smaller.
+
+`ng build` - Regualr build command with angular
+
+`ng build --prod` - Use production with AOT IVY compilation
+
+
+## Installing MySQL
+Install MySQL
+Remember password for root user
+Be able to login to mysql
+`mysql -u root -p`
+
+`show databases`
+
+Create a user for connection stirng
+`CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'Pa$$w0rd';`
+
+Grant permissions
+`GRANT ALL PRIVILEGES ON *.* TO 'appuser'@'localhost' WITH GRANT OPTION;`
+
+`FLUSH PRIVILEGES;`
+
+
+
+## Swiching DB Servers
+Install Database Provider:
+`Pomleo.EntityFramworkCore.MySQL` - match with version of runtime. Add to infrastructure project
+
+
+## Move configuration from Payment Controller.
+```C#
+    // private const string WhSecret = "whsec_THIoovKaF4h3AZ4PZiabanKw3xCMUOuY";
+    private readonly string _whSecret;
+    private readonly ILogger<IPaymentService> _logger;
+
+    public PaymentsController(IPaymentService paymentService, ILogger<IPaymentService> logger, IConfiguration config)
+    {
+      _logger = logger;
+      _paymentService = paymentService;
+      _whSecret = config.GetSection("StripeSettings:WhSecret").Value;
+    }
+```
+
+## Seperating out databse servies in startup
+We can use different DBContext for production vs development
+
+This is convention based and has to match the names.
+
+```C#
+    public void ConfigureDevelopmentServices(IServiceCollection services)
+    {
+      services.AddDbContext<StoreContext>(opt => opt.UseSqlServer(_configuration.GetConnectionString("DefaultConnection")));
+      services.AddDbContext<AppIdentityDbContext>(opt => opt.UseSqlServer(_configuration.GetConnectionString("IdentityConnection")));
+      ConfigureServices(services);
+    }
+    public void ConfigureProductionServices(IServiceCollection services)
+    {
+      services.AddDbContext<StoreContext>(opt => opt.UseSqlServer(_configuration.GetConnectionString("DefaultConnection")));
+      services.AddDbContext<AppIdentityDbContext>(opt => opt.UseSqlServer(_configuration.GetConnectionString("IdentityConnection")));
+      ConfigureServices(services);
+    }
+```
+
+## Migrations and switching databases
+.NetCore 3.0 changes make this a bit harder.
+
+Previously you were able to add annotations and keep the migrations. But now it's been overly complex.
+
+So one of the better solution is to remove all the migrations and re-create the migrations for the new database providers.
+
+In order to create a migration for production we have to make the session to use Production
+
+Widnows:
+Command Prompt:
+`set ASPNETCORE_ENVIRONMENT=Development`
+
+PowerShell:
+`$Env:ASPNETCORE_ENVIRONMENT=Development`
+
+## Change enviornment for API
+In launchSettings.json
+```json
+    "API": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "weatherforecast",
+      "applicationUrl": "https://localhost:5001;http://localhost:5000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+```
+Change the ASPNETCORE_ENVIRONMENT here. This is only for the API project, it does not have anything to do with dotnet ef tools,dotnet run looks at this. That you still ahve to set the variable in the command line.
+
+
+## Pre-Deployment Work
+Create a Publishng folder to have all the ocntent needed.
+
+Release configuration output to publish folder at the root
+`dotnet publish -c Release -o publish Skinet.sln`
+
+Content folder does not get moved over to the publish folder
+Seed data does not get moved over to the publish folder
+
+To fix this:
+```xml In API.cspoj
+  <ItemGroup>
+    // Add this::::
+    <Content Include="Content\**" CopyToPublishDirectory="PreserveNewest"/>
+    <ProjectReference Include="..\Infrastructure\Infrastructure.csproj"/>
+  </ItemGroup>
+```
+
+And same in Infrastructure.cspoj
+This configuration will not only copy it for the publish folder but also for the bin folder so we can test.
+
+```xml
+  <ItemGroup>
+    <None Include="Data\SeedData\**" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\Core\Core.csproj"/>
+  </ItemGroup>
+```
+
+We'll need to adjust our StoreContextSeed
+
+We'll take the path relative to the assmbly. And go into the Data/SeedData folder.
+```C#
+        var path = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+
+        if (!context.ProductBrands.Any())
+        {
+          // Will be run from Program Class path.
+          // var brandsData = File.ReadAllText("../Infrastructure/Data/SeedData/brands.json");
+          var brandsData = File.ReadAllText(path + @"/Data/SeedData/brands.json");
+```
+
+IN the exception Middleware:
+We can inlcude the stack trace just for initial deployment
+Middleware
+`new ApiException((int)HttpStatusCode.InternalServerError, ex.Message, ex.StackTrace.ToString()) `
+
+## Deploying to Digital Ocean
+
+You can create a droplet, there is one with LAMP
+Apache, MYSQL, PHP on Ubuntu
+
+*** LINUX SERVER SETUP USING A NEWLY CREATED DIGITAL OCEAN LAMP SERVER ***
+
+1. ssh root@ipaddressOfLinuxServer (follow instructions to change password)
+
+2. Set up mysql (password available from welcome message)
+
+cat /root/.digitalocean_password
+
+mysql -u root -p
+
+CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'Pa$$w0rd';
+GRANT ALL PRIVILEGES ON *.* TO 'appuser'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+3.  Install Redis on the server:
+
+sudo apt update
+sudo apt install redis-server
+sudo nano /etc/redis/redis.conf
+
+Inside the config look for the line:
+
+#       They do not enable continuous liveness pings back to your supervisor.
+supervised no
+
+Change this to:
+
+supervised systemd
+
+Ctrl + X then yes to save changes in the nano editor
+
+Check the status:
+
+sudo systemctl status redis
+
+Check we receive Pong back via the redis cli:
+
+redis-cli
+ping
+
+quit out of the redis cli
+
+4.  Install the dotnet runtime (follow instructions from here https://dotnet.microsoft.com/download/linux-package-manager/ubuntu18-04/runtime-current)
+
+5.  Configure Apache
+
+a2enmod proxy proxy_http proxy_html rewrite
+
+systemctl restart apache2
+
+6.  Configure the virtual host
+
+sudo nano /etc/apache2/sites-available/skinet.conf
+
+<VirtualHost *:80>
+ProxyPreserveHost On
+ProxyPass / http://127.0.0.1:5000/
+ProxyPassReverse / http://127.0.0.1:5000/
+
+ErrorLog /var/log/apache2/skinet-error.log
+CustomLog /var/log/apache2/skinet-access.log common
+
+</VirtualHost>
+
+6. Enable the site 
+
+a2ensite skinet
+
+7.  Disable the default Apache site:
+
+a2dissite 000-default
+
+Then restart apache
+
+systemctl reload apache2
+
+8. Update the config in appsettings:
+
+Update the endpoints for the webhooks to point to the IP address of the new server https://LinuxIPAddress/api/payments/webhook
+
+Copy the Webhook secret to the appsettings.json file
+
+9.  Add the deploy.reloaded extension to VS Code
+
+10.  Add a settings.json file to the .vscode folder and add the following:
+
+{
+    "deploy.reloaded": {
+        "packages": [
+            {
+                "name": "Version 1.0.0",
+                "description": "Package version 1.0.0",
+
+                "files": [
+                    "publish/**"
+                ]
+            }
+        ],
+
+        "targets": [
+            {
+                "type": "sftp",
+                "name": "Linux",
+                "description": "SFTP folder",
+
+                "host": "IP Address", "port": 22,
+                "user": "root", "password": "Your Linux password",
+
+                "dir": "/var/skinet",
+                "mappings": {
+                    "publish/**": "/"
+                }
+            }
+        ]
+    }
+}
+
+11.  Publish the dotnet application locally from the solution folder:
+
+Update the appsettings.json file and change the ApiUrl to match your server IP address e.g:
+
+"ApiUrl": "http://128.199.203.224/Content/",
+
+dotnet publish -c Release -o publish Skinet.sln
+
+This will create a new folder called publish
+
+12.  Deploy the package using deploy reloaded
+
+=== Back to the Linux server ====
+
+13.  Restart the journalctl service as this has been not working on fresh installs and is very useful to get information about the service:
+
+systemctl restart systemd-journald
+
+14.  Set up the service that will run the kestrel web server
+
+sudo nano /etc/systemd/system/skinet-web.service
+
+Paste in the folllowing:
+
+[Unit]
+Description=Kestrel service running on Ubuntu 18.04
+[Service]
+WorkingDirectory=/var/skinet
+ExecStart=/usr/bin/dotnet /var/skinet/API.dll
+Restart=always
+RestartSec=10
+SyslogIdentifier=skinet
+User=www-data
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment='Token__Key=CHANGE ME TO SOMETHING SECURE'
+Environment='Token__Issuer=https://yoursitegoeshere'
+[Install]
+WantedBy=multi-user.target
+
+
+*** NOTE
+Colons : have to be repalced with __
+***
+Then run:
+
+sudo systemctl enable skinet-web.service
+sudo systemctl start skinet-web.service
+
+15.  Ensure the server is running:
+
+netstat -ntpl
+
+16.  Check the journal logs:
+
+journalctl -u skinet-web.service
+journalctl -u skinet-web.service | tail -n 300
+journalctl -u skinet-web.service --since "5 min ago"
+
+
+===== 
+certificate
+=====
+
+Demo the Program.cs so URL is different
+Demo the config in Apache:
+
+sudo nano /etc/apache2/sites-available/skinet.conf
+sudo nano /etc/systemd/system/skinet-web.service
+
+sudo systemctl restart skinet-web.service
+
+redis-cli --scan --pattern '*product*' | xargs -L 100 redis-cli del
+

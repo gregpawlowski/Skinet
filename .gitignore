@@ -3,3 +3,5 @@ obj
 appsettings.json
 *.db
 dump.rdb
+publish
+wwwroot
